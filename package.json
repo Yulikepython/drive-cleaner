@@ -1,0 +1,21 @@
+{
+  "name": "drive-cleaner",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "push": "tsc && clasp push",
+    "deploy": "tsc && clasp deploy",
+    "open": "clasp open",
+    "watch": "tsc -w"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "description": "",
+  "devDependencies": {
+    "@types/google-apps-script": "^1.0.92",
+    "typescript": "^5.7.3"
+  }
+}
