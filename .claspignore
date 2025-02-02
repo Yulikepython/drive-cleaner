@@ -1,4 +1,3 @@
 # このファイルに含まれるパターンは clasp push で除外される
 node_modules/
-.env
 dist/  # 必要に応じてビルド先も除外する場合

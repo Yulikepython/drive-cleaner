@@ -5,6 +5,7 @@ Thank you for considering contributing to **drive-cleaner**!
 ## How to Contribute
 
 1. **Fork the Repository**
+    - Repository URL: [https://github.com/Yulikepython/drive-cleaner.git](https://github.com/Yulikepython/drive-cleaner.git)
     - Create your own fork of this repo, then clone it locally.
 
 2. **Create a Branch**
