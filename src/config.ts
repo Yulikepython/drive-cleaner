@@ -2,13 +2,11 @@
  * config.ts
  *
  * Configシートから条件を読み取るための機能をまとめる。
- * 例) シート名, セル位置, 読み取り関数など。
  */
 
 // スプレッドシート名やセル位置
 const CONFIG_SHEET_NAME = "Config";
-
-// 以下セル: B2=URL, C2=YYYY-MM, D2=MinSize, E2=OwnerEmail
+// B2=URL, C2=YYYY-MM, D2=MinSize, E2=OwnerEmail
 const CELL_FOLDER_URL = "B2";
 const CELL_YEAR_MONTH = "C2";
 const CELL_MIN_SIZE   = "D2";
@@ -16,10 +14,15 @@ const CELL_OWNER      = "E2";
 
 /**
  * Configシートの情報を読み取り返す
+ *   - folderUrl: フォルダURL
+ *   - targetYear, targetMonth: "yyyy-MM" (これ以前(含む)を対象とする)
+ *   - minSize: バイト単位。このサイズ以上を対象
+ *   - ownerEmail: オーナー一致のみ対象
  */
 function readConfigFromSheet(): {
     folderUrl: string;
-    yearMonth: string | null;
+    targetYear: number | null;
+    targetMonth: number | null;
     minSize: number | null;
     ownerEmail: string;
 } {
@@ -29,19 +32,27 @@ function readConfigFromSheet(): {
         throw new Error(`シート「${CONFIG_SHEET_NAME}」が見つかりません。`);
     }
 
-    // セルから値を取得
     const folderUrl = configSheet.getRange(CELL_FOLDER_URL).getValue().toString().trim();
     const ym = configSheet.getRange(CELL_YEAR_MONTH).getValue().toString().trim();
     const sizeStr = configSheet.getRange(CELL_MIN_SIZE).getValue().toString().trim();
     const owner = configSheet.getRange(CELL_OWNER).getValue().toString().trim();
 
-    // 型変換
-    const yearMonth = ym ? ym : null;
+    let targetYear: number | null = null;
+    let targetMonth: number | null = null;
+    if (ym) {
+        const [y, m] = ym.split("-");
+        if (y && m) {
+            targetYear = parseInt(y, 10);
+            targetMonth = parseInt(m, 10); // 1-12
+        }
+    }
+
     const minSize = sizeStr ? parseInt(sizeStr, 10) : null;
 
     return {
         folderUrl,
-        yearMonth,
+        targetYear,
+        targetMonth,
         minSize,
         ownerEmail: owner,
     };

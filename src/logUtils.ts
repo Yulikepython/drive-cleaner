@@ -156,3 +156,27 @@ interface LogRow {
     skipComment: string; // 空なら削除OK, 何か書いてあれば削除しない
     deletedAt: string;   // 空なら未削除
 }
+
+/**
+ * ログシートにすでに記載されているファイルIDをすべて返す
+ */
+function getAllLoggedFileIds(): string[] {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(LOG_SHEET_NAME);
+    if (!sheet) {
+        return [];
+    }
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+        // ヘッダのみ or シートが空
+        return [];
+    }
+
+    // A列(File ID) を2行目から最終行まで取得
+    // COL_FILE_ID = 1 と仮定
+    const range = sheet.getRange(2, COL_FILE_ID, lastRow - 1, 1);
+    const values = range.getValues(); // 2次元配列 [[fileId], [fileId], ...]
+
+    // 1次元配列に変換
+    return values.map(row => row[0].toString());
+}

@@ -1,95 +1,95 @@
 /**
- * driveUtils.ts
+ * driveUtil.ts
  *
- * Drive からファイル一覧を取得するための共通ルーチンをまとめる
+ * - getMatchingFileIterator:
+ *   フォルダURLからフォルダを取得し、
+ *   全ファイルのイテレーターと「ログに既存のFileIDセット」を返す
+ *
+ *   ここでは更新日などのフィルタは行わず、main.ts 側のループ内で isFileMatch() する。
  */
 
-/**
- * 条件に合うファイルリストをDriveから検索して返す。
- *   @param folderUrl  対象フォルダURL
- *   @param yearMonth  "yyyy-MM" (これ以前に更新されたもの)
- *   @param minSize    バイト単位。このサイズ以上
- *   @param ownerEmail オーナーが一致するファイルのみ
- */
-function getTargetFiles(
-    folderUrl: string,
-    yearMonth: string | null,
-    minSize: number | null,
-    ownerEmail: string
-): GoogleAppsScript.Drive.File[] {
-    if (!folderUrl) {
-        return [];
-    }
-    // URLからフォルダIDを抽出
-    const folderIdMatch = folderUrl.match(/[-\w]{25,}/);
-    if (!folderIdMatch) {
-        Logger.log("フォルダIDをURLから取得できません。");
-        return [];
-    }
-    const folderId = folderIdMatch[0];
+function getMatchingFileIterator(config: {
+    folderUrl: string;
+    // ... (targetYear, targetMonth, などもあるがここでは使わない)
+}): {
+    fileIterator: GoogleAppsScript.Drive.FileIterator,
+    existingFileIds: Set<string>,
+} {
+    const { folderUrl } = config;
 
-    // フォルダオブジェクト
+    const loggedIds = getAllLoggedFileIds();
+    const existingFileIds = new Set<string>(loggedIds);
+
+    const match = folderUrl.match(/[-\w]{25,}/);
+    if (!match) {
+        throw new Error("フォルダIDを取得できません。URLを確認してください。");
+    }
+    const folderId = match[0];
     const folder = DriveApp.getFolderById(folderId);
 
-    // 年月(yyyy-MM)を解析 -> それ以前(含む)か判定用
-    let targetYear: number | null = null;
-    let targetMonth: number | null = null;
-    if (yearMonth) {
-        const [y, m] = yearMonth.split("-");
-        if (y && m) {
-            targetYear = parseInt(y, 10);
-            targetMonth = parseInt(m, 10); // 1-12
-        }
+    // フォルダ内の全ファイルを返すイテレーター (ここで検索クエリは使わない)
+    const fileIterator = folder.getFiles();
+
+    return { fileIterator, existingFileIds };
+}
+
+
+/**
+ * isFileMatch:
+ *  Driveファイルが Config の条件(更新年月, サイズ, オーナー)を満たすか判定する
+ *
+ * @param file   GoogleAppsScript.Drive.File
+ * @param config readConfigFromSheet() の戻り値
+ * @returns boolean (true=マッチ, false=対象外)
+ */
+function isFileMatch(
+    file: GoogleAppsScript.Drive.File,
+    config: {
+        targetYear: number | null;
+        targetMonth: number | null;
+        minSize: number | null;
+        ownerEmail: string;
     }
-
-    const filesIt = folder.getFiles();
-    const result: GoogleAppsScript.Drive.File[] = [];
-
-    while (filesIt.hasNext()) {
-        const file = filesIt.next();
-        let match = true;
-
-        // A) 年月(yyyy-MM) 以前か
-        if (targetYear !== null && targetMonth !== null) {
-            const upd = file.getLastUpdated();
-            const y = upd.getFullYear();
-            const mo = upd.getMonth() + 1;
-            // y < targetYear or (y==targetYear && mo<=targetMonth)
-            if (y < targetYear) {
+): boolean {
+    // 1) 更新日判定( targetYear-month 以前(含む) かどうか )
+    if (config.targetYear !== null && config.targetMonth !== null) {
+        const updated = file.getLastUpdated();
+        const y = updated.getFullYear();
+        const m = updated.getMonth() + 1;
+        // ( y < targetYear ) or ( y==targetYear && m <= targetMonth )
+        if (y < config.targetYear) {
+            // OK
+        } else if (y === config.targetYear) {
+            if (m <= config.targetMonth) {
                 // OK
-            } else if (y === targetYear) {
-                if (mo <= targetMonth) {
-                    // OK
-                } else {
-                    match = false;
-                }
             } else {
-                match = false;
+                return false;
             }
-        }
-
-        // B) ファイルサイズが minSize 以上
-        if (minSize !== null && file.getSize() < minSize) {
-            match = false;
-        }
-
-        // C) オーナーが一致
-        if (ownerEmail) {
-            try {
-                const mail = file.getOwner().getEmail();
-                if (mail !== ownerEmail) {
-                    match = false;
-                }
-            } catch (e) {
-                // 共有ドライブ等オーナー取れない → 合致しない扱い
-                match = false;
-            }
-        }
-
-        if (match) {
-            result.push(file);
+        } else {
+            return false;
         }
     }
 
-    return result;
+    // 2) ファイルサイズ(minSize 以上)
+    if (config.minSize !== null) {
+        if (file.getSize() < config.minSize) {
+            return false;
+        }
+    }
+
+    // 3) オーナー一致
+    if (config.ownerEmail) {
+        try {
+            const ownerMail = file.getOwner().getEmail();
+            if (ownerMail !== config.ownerEmail) {
+                return false;
+            }
+        } catch (e) {
+            // 共有ドライブなど getOwner() 不可の場合は対象外にする
+            return false;
+        }
+    }
+
+    // 全条件パス
+    return true;
 }

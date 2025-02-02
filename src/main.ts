@@ -1,79 +1,137 @@
 /**
  * main.ts
  *
- * このファイルには「実行の流れ」を司るシナリオ関数をまとめる。
- * ボタンやメニューなどから呼び出す想定で以下2関数を用意:
+ * - fetchTargetFilesAndWriteLogInChunks:
+ *   Drive上のファイルをイテレートしつつ、Configの条件(最終更新月, サイズ, オーナー)をチェック。
+ *   一致するファイルだけログに書き込む（チャンク処理）
  *
- *  1) fetchTargetFilesAndWriteLog()
- *     - Configシートの条件を読み取り
- *     - Drive上で該当ファイルを検索
- *     - Logシートに一覧を書き出す
- *       (削除コメント, 削除日列は空のまま)
- *
- *  2) deleteFilesFromLog()
- *     - Logシートを参照
- *     - まだ削除されていない (Deleted At 列が空) & Skip/Comment 列が空 のファイルを実際に削除
- *     - 削除日(Deleted At)を記録
+ * - deleteFilesFromLogInChunks:
+ *   FileLogシートを参照し、未削除かつSkip/Commentが空のファイルをチャンクで削除
  */
 
-// =====================
-// ボタン1: ファイル取得＆ログ書き出し
-// =====================
-function fetchTargetFilesAndWriteLog(): void {
-    // 1) Configシートから条件を読み取り
-    const config = readConfigFromSheet(); // config.ts内の関数
+// 1回の実行で最大何件のファイルをログに書き出すか
+const MAX_FILE_PROCESS_FETCH = 2000;
+// 1度のシート書き込みチャンクサイズ
+const CHUNK_SIZE_FETCH = 200;
 
-    // 2) Driveから条件に合うファイルを取得
-    const files = getTargetFiles(
-        config.folderUrl,
-        config.yearMonth,
-        config.minSize,
-        config.ownerEmail
-    ); // driveUtils.ts内の関数
+// 削除処理の制限
+const MAX_FILE_PROCESS_DELETE = 400;
+const CHUNK_SIZE_DELETE = 100;
 
-    // 3) Logシートに書き出し
-    writeFilesToLogSheet(files); // logUtils.ts内の関数
-
-    // メッセージ
-    Logger.log(`完了: 条件に合うファイル ${files.length} 件をLogシートへ書き出しました。`);
-    // SpreadsheetApp.getUi().alert(`完了: 条件に合うファイル ${files.length} 件をLogシートへ書き出しました。`);　//スケジューラーで呼び出すことも考えて、アラートはコメントアウト
-}
-
-// =====================
-// ボタン2: ログを見て実際に削除
-// =====================
-function deleteFilesFromLog(): void {
-    // 1) Logシートから「まだ削除されていない」行を取得
-    //    ＝ DeletedAt列が空の行
-    const notDeletedRows = getNotDeletedRows(); // logUtils.ts内の関数
-
-    if (notDeletedRows.length === 0) {
-        Logger.log("削除対象となる行はありません。");
-        //SpreadsheetApp.getUi().alert("削除対象となる行はありません。"); //スケジューラーで呼び出すことも考えて、アラートはコメントアウト
+/**
+ * (1) Driveファイルを取得して、FileLog シートへ書き込む（チャンク対応版 + フィルタリング）
+ */
+function fetchTargetFilesAndWriteLogInChunks(): void {
+    const config = readConfigFromSheet();   // ここで targetYear/month, minSize, ownerEmail を取得
+    if (!config.folderUrl) {
+        Logger.log("フォルダURLが未設定です。");
         return;
     }
 
-    // 2) そのうち、「Skip/Comment 列が空」の行を削除対象とする
-    const rowsToDelete = notDeletedRows.filter(row => {
-        return !row.skipComment; // skipComment が空文字の場合のみ削除対象
-    });
+    // フォルダ内のファイル取得用イテレータ + すでにログにあるFileID一覧(Set)
+    const { fileIterator, existingFileIds } = getMatchingFileIterator(config);
 
-    // 3) 実際に削除を実行 (Driveのファイルをゴミ箱に移動)
-    let deleteCount = 0;
-    rowsToDelete.forEach((row) => {
-        const fileId = row.fileId;
+    let totalCount = 0;
+    let batchBuffer: GoogleAppsScript.Drive.File[] = [];
+
+    while (fileIterator.hasNext()) {
+        const file = fileIterator.next();
+
+        // 既存ログに同じFile IDがあればスキップ
+        if (existingFileIds.has(file.getId())) {
+            continue;
+        }
+
+        // ★★★ ここでフィルタリング
+        if (!isFileMatch(file, config)) {
+            // もし条件(更新日, サイズ, オーナー等)に合わなければスキップ
+            continue;
+        }
+
+        // フィルタを通ったファイルのみバッファに格納
+        batchBuffer.push(file);
+        totalCount++;
+
+        // チャンクに達した or MAX超過ならシート書き込み
+        if (batchBuffer.length >= CHUNK_SIZE_FETCH) {
+            writeFilesToLogSheet(batchBuffer);
+            batchBuffer = [];
+        }
+        if (totalCount >= MAX_FILE_PROCESS_FETCH) {
+            // 1回の実行で上限に達したので終了
+            break;
+        }
+    }
+
+    // 残りのバッファを書き込み
+    if (batchBuffer.length > 0) {
+        writeFilesToLogSheet(batchBuffer);
+    }
+
+    Logger.log(`完了: ${totalCount}件 をログに書き出しました。`);
+    // SpreadsheetApp.getUi().alert(`完了: ${totalCount}件 をログに書き出しました。`);
+}
+
+
+/**
+ * (2) FileLog シートを見て、まだ削除されていない＆Skip/Commentが空のファイルを削除（チャンク対応版）
+ */
+function deleteFilesFromLogInChunks(): void {
+    const notDeleted = getNotDeletedRows();
+    if (notDeleted.length === 0) {
+        Logger.log("削除対象行なし。");
+        return;
+    }
+
+    // Skip/Comment が空のものだけ削除対象
+    const targets = notDeleted.filter(row => !row.skipComment);
+
+    if (targets.length === 0) {
+        Logger.log("Skip/Comment が書かれているため削除対象行なし。");
+        return;
+    }
+
+    let totalDeleted = 0;
+    let batchBuffer: LogRow[] = [];
+
+    for (let i = 0; i < targets.length; i++) {
+        batchBuffer.push(targets[i]);
+
+        if (batchBuffer.length >= CHUNK_SIZE_DELETE) {
+            deleteAndLog(batchBuffer);
+            totalDeleted += batchBuffer.length;
+            batchBuffer = [];
+
+            if (totalDeleted >= MAX_FILE_PROCESS_DELETE) {
+                break;
+            }
+        }
+    }
+
+    // 残り
+    if (batchBuffer.length > 0 && totalDeleted < MAX_FILE_PROCESS_DELETE) {
+        deleteAndLog(batchBuffer);
+        totalDeleted += batchBuffer.length;
+    }
+
+    Logger.log(`完了: ${totalDeleted}件 を削除しました。`);
+    // SpreadsheetApp.getUi().alert(`完了: ${totalDeleted}件 を削除しました。`);
+}
+
+
+/**
+ * ファイルをまとめて削除し、削除日時をLogシートに書き込む
+ */
+function deleteAndLog(rows: LogRow[]): void {
+    const now = new Date();
+    rows.forEach(row => {
         try {
-            const file = DriveApp.getFileById(fileId);
+            const file = DriveApp.getFileById(row.fileId);
             file.setTrashed(true);
-            deleteCount++;
-
-            // 4) Logシートの DeletedAt 列に現在時刻を記録
-            updateDeletedAt(row.rowIndex, new Date()); // logUtils.ts内の関数
+            updateDeletedAt(row.rowIndex, now);
         } catch (e) {
-            Logger.log(`ファイル削除失敗(ID=${fileId}): ${e}`);
+            Logger.log(`削除エラー: fileId=${row.fileId} => ${e}`);
         }
     });
-
-    Logger.log(`完了: ${deleteCount} 件を削除しました。`);
-    SpreadsheetApp.getUi().alert(`完了: ${deleteCount} 件を削除しました。`);
 }
+
