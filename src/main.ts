@@ -118,6 +118,25 @@ function deleteFilesFromLogInChunks(): void {
     // SpreadsheetApp.getUi().alert(`完了: ${totalDeleted}件 を削除しました。`);
 }
 
+/**
+ * (新規) スケジュールトリガーから呼び出す用: 一覧取得を自動実行
+ * ・fetchTargetFilesAndWriteLogInChunks() をそのまま呼ぶだけ
+ */
+function scheduledFetchFiles(): void {
+    // 追加のチェックを入れたい場合（例: すでに何か十分なログがあるかどうか）などはここで実装可。
+    fetchTargetFilesAndWriteLogInChunks();
+}
+
+/**
+ * (新規) スケジュールトリガーから呼び出す用: 削除を自動実行
+ * ・deleteFilesFromLogInChunks() を呼ぶ
+ * ・リスクがあるため、最終的な判断は慎重に
+ */
+function scheduledDeleteFiles(): void {
+    // 例: "本当に削除していいか" フラグをConfigシートで確認する 等のチェックを入れてもOK
+    deleteFilesFromLogInChunks();
+}
+
 
 /**
  * ファイルをまとめて削除し、削除日時をLogシートに書き込む
